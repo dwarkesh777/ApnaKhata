@@ -37,12 +37,17 @@ import java.io.File
 import java.io.FileWriter
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.app.DatePickerDialog
 import android.graphics.pdf.PdfDocument
 import android.graphics.Paint
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.*
@@ -62,6 +67,7 @@ fun ExpenseTrackerApp(viewModel: ExpenseViewModel) {
     val userName by viewModel.userName.collectAsStateWithLifecycle()
     val userEmail by viewModel.userEmail.collectAsStateWithLifecycle()
     val userAvatar by viewModel.userAvatar.collectAsStateWithLifecycle()
+    val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
 
     var currentTab by remember { mutableStateOf(0) } // 0 = Dashboard, 1 = Analytics, 2 = History, 3 = Settings
     var showAddDialog by remember { mutableStateOf(false) }
@@ -69,6 +75,20 @@ fun ExpenseTrackerApp(viewModel: ExpenseViewModel) {
     var showEditDialog by remember { mutableStateOf<Expense?>(null) }
     var showProfileDialog by remember { mutableStateOf(false) }
     var showPdfDialog by remember { mutableStateOf(false) }
+    var isAppLocked by remember(isAppLockEnabled) { mutableStateOf(isAppLockEnabled) }
+
+    LaunchedEffect(isAppLockEnabled, isAppLocked) {
+        if (isAppLockEnabled && isAppLocked) {
+            val activity = context as? FragmentActivity
+            if (activity != null) {
+                showSystemBiometricPrompt(
+                    activity = activity,
+                    onSuccess = { isAppLocked = false },
+                    onError = { /* User can tap button on screen to retry */ }
+                )
+            }
+        }
+    }
 
     val currencyFormatter = remember(currencySymbol) {
         val df = DecimalFormat("#,##0.00")
@@ -298,9 +318,39 @@ fun ExpenseTrackerApp(viewModel: ExpenseViewModel) {
                     },
                     onOpenPdfExport = {
                         showPdfDialog = true
+                    },
+                    isAppLockEnabled = isAppLockEnabled,
+                    onToggleAppLock = { enabled ->
+                        viewModel.setAppLockEnabled(enabled)
+                        if (enabled) {
+                            isAppLocked = true
+                        }
                     }
                 )
             }
+        }
+
+        // App Lock Screen Overlay
+        if (isAppLockEnabled && isAppLocked) {
+            AppLockOverlay(
+                onUnlockRequest = {
+                    val activity = context as? FragmentActivity
+                    if (activity != null) {
+                        showSystemBiometricPrompt(
+                            activity = activity,
+                            onSuccess = { isAppLocked = false },
+                            onError = { err ->
+                                android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    } else {
+                        isAppLocked = false
+                    }
+                },
+                onEmergencyPasscodeUnlock = {
+                    isAppLocked = false
+                }
+            )
         }
 
         // Add Dialog
@@ -1276,7 +1326,9 @@ fun SettingsTab(
     onUpdateCurrency: (String) -> Unit,
     onExportCsv: () -> Unit,
     onImportCsv: (android.net.Uri) -> Unit,
-    onOpenPdfExport: () -> Unit
+    onOpenPdfExport: () -> Unit,
+    isAppLockEnabled: Boolean = false,
+    onToggleAppLock: (Boolean) -> Unit = {}
 ) {
     var budgetInput by remember { mutableStateOf(budget.toString()) }
     var showResetDialog by remember { mutableStateOf(false) }
@@ -1550,6 +1602,146 @@ fun SettingsTab(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Clear All Transactions", fontWeight = FontWeight.Bold, color = Color.White)
                         }
+                    }
+                }
+            }
+        }
+
+        // Security & App Lock Card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(
+                        "Security & Protection",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .background(BentoNavActive, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Security,
+                                    contentDescription = "System App Lock",
+                                    tint = BentoPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Column {
+                                Text(
+                                    "System App Lock",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Text(
+                                    "Protect app using device biometrics or lock PIN",
+                                    style = MaterialTheme.typography.labelSmall.copy(color = SlateGrey)
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = isAppLockEnabled,
+                            onCheckedChange = { enabled ->
+                                onToggleAppLock(enabled)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = BentoPrimary
+                            ),
+                            modifier = Modifier.testTag("app_lock_switch")
+                        )
+                    }
+                }
+            }
+        }
+
+        // Privacy Policy Card
+        item {
+            val context = LocalContext.current
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(
+                        "Privacy & Policies",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                            .clickable {
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://hisabbook-ds.vercel.app/"))
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    android.widget.Toast.makeText(context, "Could not open Privacy Policy link", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .background(Color(0xFFE0F2FE), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Policy,
+                                    contentDescription = "Privacy Policy",
+                                    tint = Color(0xFF0284C7),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Column {
+                                Text(
+                                    "Privacy Policy",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Text(
+                                    "https://hisabbook-ds.vercel.app/",
+                                    style = MaterialTheme.typography.labelSmall.copy(color = SlateGrey),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        Icon(
+                            Icons.Default.OpenInNew,
+                            contentDescription = "Open Link",
+                            tint = SlateGrey,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             }
@@ -2811,6 +3003,135 @@ fun exportToPdf(
         onSuccess(pdfFile)
     } catch (e: Exception) {
         onFailure(e.message ?: "Failed to generate PDF")
+    }
+}
+
+fun showSystemBiometricPrompt(
+    activity: FragmentActivity,
+    onSuccess: () -> Unit,
+    onError: (String) -> Unit
+) {
+    val executor = ContextCompat.getMainExecutor(activity)
+    val biometricPrompt = BiometricPrompt(
+        activity,
+        executor,
+        object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                super.onAuthenticationSucceeded(result)
+                onSuccess()
+            }
+
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                super.onAuthenticationError(errorCode, errString)
+                onError(errString.toString())
+            }
+
+            override fun onAuthenticationFailed() {
+                super.onAuthenticationFailed()
+            }
+        }
+    )
+
+    val promptInfo = BiometricPrompt.PromptInfo.Builder()
+        .setTitle("HisabBook System Lock")
+        .setSubtitle("Authenticate using biometrics or device PIN/Pattern")
+        .setAllowedAuthenticators(
+            BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            BiometricManager.Authenticators.BIOMETRIC_WEAK or
+            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        )
+        .build()
+
+    try {
+        biometricPrompt.authenticate(promptInfo)
+    } catch (e: Exception) {
+        onError(e.message ?: "Biometric prompt error")
+    }
+}
+
+@Composable
+fun AppLockOverlay(
+    onUnlockRequest: () -> Unit,
+    onEmergencyPasscodeUnlock: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = { /* Modal lock screen */ },
+        properties = androidx.compose.ui.window.DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false
+        )
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+                .testTag("app_lock_overlay"),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(CircleShape)
+                        .background(BentoNavActive),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Lock,
+                        contentDescription = "App Locked",
+                        tint = BentoPrimary,
+                        modifier = Modifier.size(36.dp)
+                    )
+                }
+
+                Text(
+                    "HisabBook Protected",
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = BentoTextPrimary
+                    )
+                )
+
+                Text(
+                    "System App Lock is enabled to protect your personal financial records.",
+                    style = MaterialTheme.typography.bodyMedium.copy(color = SlateGrey),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = onUnlockRequest,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = BentoPrimary),
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(vertical = 14.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.Fingerprint, contentDescription = "Biometric Unlock", tint = Color.White)
+                        Text("Unlock with System Lock", fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                }
+
+                TextButton(
+                    onClick = onEmergencyPasscodeUnlock,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Unlock App Directly", color = BentoPrimary, style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
     }
 }
 

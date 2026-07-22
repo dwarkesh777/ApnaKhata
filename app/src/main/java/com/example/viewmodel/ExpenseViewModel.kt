@@ -41,6 +41,10 @@ class ExpenseViewModel(application: Application) : AndroidViewModel(application)
     private val _userAvatar = MutableStateFlow("avatar_1")
     val userAvatar: StateFlow<String> = _userAvatar.asStateFlow()
 
+    // App Lock state
+    private val _isAppLockEnabled = MutableStateFlow(false)
+    val isAppLockEnabled: StateFlow<Boolean> = _isAppLockEnabled.asStateFlow()
+
     // Filters
     val searchQuery = MutableStateFlow("")
     val selectedCategoryFilter = MutableStateFlow("All")
@@ -65,6 +69,14 @@ class ExpenseViewModel(application: Application) : AndroidViewModel(application)
         _userName.value = sharedPrefs.getString("user_name", "Jordan Smith") ?: "Jordan Smith"
         _userEmail.value = sharedPrefs.getString("user_email", "jordan.smith@example.com") ?: "jordan.smith@example.com"
         _userAvatar.value = sharedPrefs.getString("user_avatar", "avatar_1") ?: "avatar_1"
+        _isAppLockEnabled.value = sharedPrefs.getBoolean("is_app_lock_enabled", false)
+    }
+
+    fun setAppLockEnabled(enabled: Boolean) {
+        _isAppLockEnabled.value = enabled
+        viewModelScope.launch {
+            sharedPrefs.edit().putBoolean("is_app_lock_enabled", enabled).apply()
+        }
     }
 
     // Filtered Expenses
